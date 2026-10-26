@@ -565,6 +565,56 @@ func (b *TelegramBot) donorStar(userID int64, username string) string {
 	return ""
 }
 
+// handleDonorsCommand lists every donor for an admin. Donors are stored as numeric
+// IDs and/or lowercased @usernames, so an ID is shown with its last-seen @username
+// when the bot has one, and a username-only grant (not yet seen by ID) is listed
+// by handle after the ID entries.
+func (b *TelegramBot) handleDonorsCommand(chatID int64, replyToID int) {
+	b.stateMu.Lock()
+	ids := make([]int64, 0, len(b.donorUserIDs))
+	known := make(map[string]bool)
+	lines := make(map[int64]string, len(b.donorUserIDs))
+	for id := range b.donorUserIDs {
+		ids = append(ids, id)
+		uname := ""
+		if s := b.userStats[id]; s != nil {
+			uname = strings.ToLower(s.Username)
+		}
+		if uname != "" {
+			known[uname] = true
+		}
+		lines[id] = formatUserRef(id, uname)
+		if uname != "" {
+			lines[id] += " (" + strconv.FormatInt(id, 10) + ")"
+		}
+	}
+	var handles []string
+	for name := range b.donorUsernames {
+		if !known[name] {
+			handles = append(handles, "@"+name)
+		}
+	}
+	b.stateMu.Unlock()
+
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	sort.Strings(handles)
+
+	total := len(ids) + len(handles)
+	if total == 0 {
+		_ = b.sendMessageWithReply(chatID, "No donors yet. Grant one with /p <telegram-id | @username>.", nil, replyToID)
+		return
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "⭐ Donors (%d)\n", total)
+	for _, id := range ids {
+		sb.WriteString("• " + lines[id] + "\n")
+	}
+	for _, h := range handles {
+		sb.WriteString("• " + h + "\n")
+	}
+	_ = b.sendMessageWithReply(chatID, strings.TrimRight(sb.String(), "\n"), nil, replyToID)
+}
+
 // heavyRipLimit is how many in-flight heavy rips of a kind a user may hold at once:
 // 1 artist / 2 huge-playlist for regular users, 2 / 3 for donors. Because non-admin
 // heavy rips defer to the nightly sleeptime window, this works out to ~that many per
