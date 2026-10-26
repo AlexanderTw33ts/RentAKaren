@@ -201,6 +201,9 @@ type TelegramBot struct {
 	scheduleFile  string               // pending sleeptime rips (persisted, NOT backed up)
 	adminLock     bool                 // true => only admins may use the bot (persisted)
 	lockReason    string               // optional reason shown to users while locked (set via /unauth <reason>, persisted)
+	// restrictionMode is the temporary member-limits valve (see restriction.go); off
+	// by default, toggled with /restrict, persisted.
+	restrictionMode bool
 	scheduledJobs []*scheduledJob      // pending sleeptime rips (persisted)
 	userPrefs     map[int64]*UserPrefs // saved per-user rip profiles (persisted, keyed by user ID)
 	userStats     map[int64]*UserStats // per-user lifetime usage tally (persisted, keyed by user ID)
@@ -1950,7 +1953,7 @@ func (b *TelegramBot) handleCommand(chatID int64, userID int64, username string,
 		if albumID != "" {
 			b.bumpStats(userID, func(s *UserStats) { s.AlbumRips++ })
 			if headlessMode != "" {
-				b.enqueueAlbumDownload(chatID, albumID, replyToID, 0, headlessMode, forceAAC, forceAtmos, forceFlac, forceNoCache, userID, "")
+				b.enqueueAlbumDownload(chatID, albumID, replyToID, 0, headlessMode, forceAAC, forceAtmos, forceFlac, forceNoCache, userID, username)
 			} else {
 				b.queueDownloadAlbumWithReply(chatID, userID, albumID, replyToID, forceAAC, forceAtmos, forceFlac, forceNoCache)
 			}
@@ -1962,7 +1965,7 @@ func (b *TelegramBot) handleCommand(chatID int64, userID int64, username string,
 			b.bumpStats(userID, func(s *UserStats) { s.PlaylistRips++ })
 			if b.isAdmin(userID) {
 				// Admins bypass the >100-track sleeptime gate entirely.
-				b.dispatchPlaylistNormal(chatID, userID, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, forceNoCache)
+				b.dispatchPlaylistNormal(chatID, userID, username, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, forceNoCache)
 			} else {
 				// Non-admins: count first (blocking → goroutine); >100 tracks defers
 				// to the sleeptime window forced to Gofile ZIP.
@@ -1983,6 +1986,9 @@ func (b *TelegramBot) handleCommand(chatID int64, userID int64, username string,
 
 		artistStorefront, artistID := checkUrlArtist(link)
 		if artistID != "" {
+			if b.denyIfRestrictedMember(chatID, replyToID, userID, username, "Artist and discography rips") {
+				return
+			}
 			b.bumpStats(userID, func(s *UserStats) { s.ArtistRips++ })
 			sel := &pendingArtistSel{
 				chatID:     chatID,
@@ -2067,6 +2073,12 @@ func (b *TelegramBot) handleCommand(chatID int64, userID int64, username string,
 			msg = "🔒 Bot restricted to admins (reason: " + reason + "). Use /auth to reopen."
 		}
 		_ = b.sendMessageWithReply(chatID, msg, nil, replyToID)
+	case "restrict":
+		// Member-limits valve (admin-only): /restrict [on|off].
+		if !b.isAdmin(userID) {
+			return // hidden admin command
+		}
+		b.handleRestrictCommand(chatID, args, replyToID)
 	case "p":
 		// Promote a user to donor (admin-only). Mirrors /auth's id|@username parsing.
 		if !b.isAdmin(userID) {
@@ -2406,7 +2418,7 @@ func (b *TelegramBot) handleTransferMode(chatID int64, messageID int, mode strin
 			// JSON-cache zip short-circuit. The catalog deliberately does not cache
 			// zips (see deliverTelegramZip) — track-level caching covers individual
 			// delivery instead.
-			if b.trySendCachedAlbumZip(chatID, pending.AlbumID, replyToID, format) {
+			if b.trySendCachedAlbumZipQuota(chatID, pending.AlbumID, replyToID, format, userID, username) {
 				return ""
 			}
 		}
@@ -2656,7 +2668,7 @@ func (b *TelegramBot) enqueueBulkItem(item bulkItem, mode string, fl dlFlags, ch
 		format := b.resolveFormat(chatID, fl.flac)
 		// JSON-cache zip short-circuit only; the catalog does not cache zips.
 		if mode == transferModeGofileZip && !fl.noCache &&
-			b.trySendCachedAlbumZip(chatID, item.id, replyToID, format) {
+			b.trySendCachedAlbumZipQuota(chatID, item.id, replyToID, format, userID, username) {
 			return
 		}
 		b.enqueueAlbumDownload(chatID, item.id, replyToID, 0, mode, fl.aac, fl.atmos, fl.flac, fl.noCache, userID, username)
@@ -2872,6 +2884,10 @@ func (b *TelegramBot) startArtistScope(sel *pendingArtistSel, section string) {
 		b.runArtistRipScoped(sel.chatID, sel.userID, sel.username, sel.storefront, sel.artistID, section, sel.replyToID, sel.forceAAC, sel.forceAtmos, sel.forceFlac, "")
 		return
 	}
+	// Backstop for a scope prompt opened before restriction mode was switched on.
+	if b.denyIfRestrictedMember(sel.chatID, sel.replyToID, sel.userID, sel.username, "Artist and discography rips") {
+		return
+	}
 	b.scheduleOrRun(&scheduledJob{
 		Kind:       "artist",
 		Section:    section,
@@ -2918,34 +2934,59 @@ func (b *TelegramBot) enqueueAlbumDownload(chatID int64, albumID string, replyTo
 		_ = b.sendMessage(chatID, "Album ID is empty.", nil)
 		return
 	}
+	// Restriction mode: a member's album spends one of their per-day slots (a no-op
+	// "" charge for everyone else). Every exit below commits or refunds it.
+	chargeID, admitted := b.admitRestricted(chatID, replyToID, "album", userID, username)
+	if !admitted {
+		return
+	}
 	format := b.resolveFormat(chatID, forceFlac)
 	// Gofile re-rip dedup: a repeat request for this (album, tier) within the link's
 	// ~7-day life gets the existing Gofile link(s) instead of a fresh rip. Gofile mode
 	// only (Telegram has its own file_id cache), and skipped under -nc.
 	variant := gofileDedupVariant(format, forceAAC, forceAtmos)
 	if transferMode == transferModeGofileZip && !noCache && b.checkGofileDedup(chatID, replyToID, "album", albumID, variant) {
+		b.quotaRefund(chargeID, 0) // nothing enqueued — hand the slot back
 		return
 	}
 	// D9 read-through: deliver cached tracks from the dump and rip only the gaps.
 	// Returns true when it has taken ownership (enqueues its own worker task), so we
 	// must not also enqueue the whole-album rip below.
 	if b.catalogServeCollection(chatID, "album", albumID, replyToID, statusMessageID, transferMode, format, forceAAC, forceAtmos, forceFlac, noCache, userID, username) {
+		// Served under the catalog's own worker task, so this request's after() never
+		// fires — consume the charge here (the user got their album).
+		b.quotaCommit(chargeID, 0)
 		return
 	}
 	var dedup *gofileDedupInfo
 	if transferMode == transferModeGofileZip {
 		dedup = newGofileDedupInfo("album", albumID, format, "", forceAAC, forceAtmos, userID)
 	}
-	b.enqueueDownloadWithAfter(chatID, userID, username, replyToID, statusMessageID, false, format, transferMode, albumID, noCache, func(ctx context.Context) error {
+	// Capture the rip state, ctx and ripAlbum's error so after() can commit or refund
+	// the charge (a no-op when chargeID == "").
+	var (
+		sharedRS  *RipState
+		sharedCtx context.Context
+		fnErr     error
+	)
+	ok := b.enqueueDownloadWithAfter(chatID, userID, username, replyToID, statusMessageID, false, format, transferMode, albumID, noCache, func(ctx context.Context) error {
+		sharedCtx = ctx
+		sharedRS = ripStateFrom(ctx)
 		if forceAtmos {
-			if rs := ripStateFrom(ctx); rs != nil {
-				rs.Atmos = true
+			if sharedRS != nil {
+				sharedRS.Atmos = true
 			} else {
 				dl_atmos = true
 			}
 		}
-		return ripAlbum(albumID, b.appleToken, Config.Storefront, "", forceAAC, ctx)
-	}, nil, "", dedup)
+		fnErr = ripAlbum(albumID, b.appleToken, Config.Storefront, "", forceAAC, ctx)
+		return fnErr
+	}, func() {
+		b.finalizeHeavyQuota(chargeID, sharedRS, sharedCtx, fnErr == nil, 0, false)
+	}, chargeID, dedup)
+	if !ok {
+		b.quotaRefund(chargeID, 0) // never enqueued (queue full)
+	}
 }
 
 func (b *TelegramBot) enqueuePlaylistDownload(chatID int64, playlistID string, replyToID int, statusMessageID int, transferMode string, forceAAC bool, forceAtmos bool, forceFlac bool, noCache bool, userID int64, username string, quotaChargeID string) {
@@ -2953,6 +2994,15 @@ func (b *TelegramBot) enqueuePlaylistDownload(chatID int64, playlistID string, r
 		b.quotaRefund(quotaChargeID, 0)
 		_ = b.sendMessage(chatID, "Playlist ID is empty.", nil)
 		return
+	}
+	// Restriction mode: a member's (small) playlist spends a per-day slot here. A
+	// non-empty quotaChargeID means a scheduled heavy rip already carries its charge.
+	if quotaChargeID == "" {
+		id, admitted := b.admitRestricted(chatID, replyToID, "playlist", userID, username)
+		if !admitted {
+			return
+		}
+		quotaChargeID = id
 	}
 	format := b.resolveFormat(chatID, forceFlac)
 	// Gofile re-rip dedup: if this exact (playlist, tier) was delivered to Gofile in
