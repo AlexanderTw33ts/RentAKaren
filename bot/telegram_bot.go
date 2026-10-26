@@ -2095,6 +2095,12 @@ func (b *TelegramBot) handleCommand(chatID int64, userID int64, username string,
 		}
 		b.setUserDonor(id, uname, true)
 		_ = b.sendMessageWithReply(chatID, "⭐ Donor perks granted to "+formatUserRef(id, uname)+".", nil, replyToID)
+	case "donors":
+		// List every donor (admin-only).
+		if !b.isAdmin(userID) {
+			return // hidden admin command
+		}
+		b.handleDonorsCommand(chatID, replyToID)
 	case "d":
 		// Demote a donor back to a regular user (admin-only).
 		if !b.isAdmin(userID) {
