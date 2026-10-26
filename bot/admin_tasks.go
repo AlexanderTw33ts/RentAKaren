@@ -107,7 +107,8 @@ type telegramStateFile struct {
 	Version          int                  `json:"version"`
 	AdminLock        bool                 `json:"admin_lock"`
 	LockReason       string               `json:"lock_reason,omitempty"`
-	ScheduledJobs    []*scheduledJob      `json:"scheduled_jobs,omitempty"`
+	RestrictionMode  bool                 `json:"restriction_mode,omitempty"`
+	ScheduledJobs   []*scheduledJob      `json:"scheduled_jobs,omitempty"`
 	UserPrefs        map[int64]*UserPrefs `json:"user_prefs"`
 	UserStats        map[int64]*UserStats `json:"user_stats,omitempty"`
 	BlockedUserIDs   []int64              `json:"blocked_user_ids,omitempty"`
@@ -122,11 +123,12 @@ type telegramStateFile struct {
 // are stored as sorted-free slices; key order is irrelevant on reload.
 func (b *TelegramBot) stateFilePayloadLocked() telegramStateFile {
 	payload := telegramStateFile{
-		Version:    1,
-		AdminLock:  b.adminLock,
-		LockReason: b.lockReason,
-		UserPrefs:  b.userPrefs,
-		UserStats:  b.userStats,
+		Version:         1,
+		AdminLock:       b.adminLock,
+		LockReason:      b.lockReason,
+		RestrictionMode: b.restrictionMode,
+		UserPrefs:       b.userPrefs,
+		UserStats:       b.userStats,
 	}
 	for id := range b.blockedUserIDs {
 		payload.BlockedUserIDs = append(payload.BlockedUserIDs, id)
@@ -158,6 +160,7 @@ func (b *TelegramBot) loadState() {
 	defer b.stateMu.Unlock()
 	b.adminLock = false
 	b.lockReason = ""
+	b.restrictionMode = false
 	b.scheduledJobs = nil
 	b.userPrefs = make(map[int64]*UserPrefs)
 	b.userStats = make(map[int64]*UserStats)
@@ -187,6 +190,7 @@ func (b *TelegramBot) loadState() {
 	}
 	b.adminLock = payload.AdminLock
 	b.lockReason = payload.LockReason
+	b.restrictionMode = payload.RestrictionMode
 	b.scheduledJobs = payload.ScheduledJobs
 	if payload.UserPrefs != nil {
 		b.userPrefs = payload.UserPrefs
@@ -792,7 +796,7 @@ func (b *TelegramBot) scheduleOrRun(j *scheduledJob) {
 	// separately. Admins never reach here (they bypass scheduling entirely), so this
 	// only ever gates non-admins.
 	donor := b.isUserDonor(j.UserID, j.Username)
-	limit := heavyRipLimit(j.Kind, donor)
+	limit := b.ripLimit(j.Kind, donor)
 	capLabel := "discography"
 	if j.Kind == "playlist" {
 		capLabel = "huge playlist"
@@ -1185,10 +1189,19 @@ const playlistSleeptimeThreshold = 100
 func (b *TelegramBot) routePlaylistNonAdmin(chatID, userID int64, username, storefront, playlistID, link string, replyToID int, headlessMode string, forceAAC, forceAtmos, forceFlac, noCache bool) {
 	resp, err := ampapi.GetPlaylistResp(orStorefront(storefront), playlistID, b.searchLanguage(), b.appleToken)
 	if err != nil || resp == nil || len(resp.Data) == 0 {
-		b.dispatchPlaylistNormal(chatID, userID, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, noCache)
+		// Restriction mode fails closed: without the size we can't tell a small playlist
+		// from a large one, and large ones are donor-only.
+		if b.isRestrictedMember(userID, username) {
+			_ = b.sendMessageWithReply(chatID, "Couldn't check that playlist's size just now — please try again in a moment.", nil, replyToID)
+			return
+		}
+		b.dispatchPlaylistNormal(chatID, userID, username, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, noCache)
 		return
 	}
 	if len(resp.Data[0].Relationships.Tracks.Data) > playlistSleeptimeThreshold {
+		if b.denyIfRestrictedMember(chatID, replyToID, userID, username, fmt.Sprintf("Playlists over %d tracks", playlistSleeptimeThreshold)) {
+			return
+		}
 		b.scheduleOrRun(&scheduledJob{
 			Kind:       "playlist",
 			ChatID:     chatID,
@@ -1204,14 +1217,14 @@ func (b *TelegramBot) routePlaylistNonAdmin(chatID, userID int64, username, stor
 		})
 		return
 	}
-	b.dispatchPlaylistNormal(chatID, userID, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, noCache)
+	b.dispatchPlaylistNormal(chatID, userID, username, playlistID, replyToID, headlessMode, forceAAC, forceAtmos, forceFlac, noCache)
 }
 
 // dispatchPlaylistNormal is the pre-existing playlist behavior: headless enqueue
 // when a delivery flag was given, otherwise the delivery-mode keyboard prompt.
-func (b *TelegramBot) dispatchPlaylistNormal(chatID, userID int64, playlistID string, replyToID int, headlessMode string, forceAAC, forceAtmos, forceFlac, noCache bool) {
+func (b *TelegramBot) dispatchPlaylistNormal(chatID, userID int64, username, playlistID string, replyToID int, headlessMode string, forceAAC, forceAtmos, forceFlac, noCache bool) {
 	if headlessMode != "" {
-		b.enqueuePlaylistDownload(chatID, playlistID, replyToID, 0, headlessMode, forceAAC, forceAtmos, forceFlac, noCache, userID, "", "")
+		b.enqueuePlaylistDownload(chatID, playlistID, replyToID, 0, headlessMode, forceAAC, forceAtmos, forceFlac, noCache, userID, username, "")
 	} else {
 		b.queueDownloadPlaylistWithReply(chatID, userID, playlistID, replyToID, forceAAC, forceAtmos, forceFlac, noCache)
 	}

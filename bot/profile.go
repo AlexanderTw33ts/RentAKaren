@@ -102,19 +102,19 @@ func (b *TelegramBot) userQuota(userID int64, username string) (tasks, maxTasks,
 	}
 	artist = b.quotaUsageFor(userID, "artist")
 	playlist = b.quotaUsageFor(userID, "playlist")
-	artistMax = heavyRipLimit("artist", donor)
-	playlistMax = heavyRipLimit("playlist", donor)
+	artistMax = b.ripLimit("artist", donor)
+	playlistMax = b.ripLimit("playlist", donor)
 	return
 }
 
 func quotaLineRich(tasks, maxTasks, artist, artistMax, playlist, playlistMax int) string {
-	return fmt.Sprintf("\n📊 **Quota**: tasks %d/%d in flight · today: artist %d/%d · huge-playlist %d/%d (resets 1 PM Dhaka)\n",
-		tasks, maxTasks, artist, artistMax, playlist, playlistMax)
+	return fmt.Sprintf("\n📊 **Quota**: tasks %d/%d in flight · today: artist %d/%s · huge-playlist %d/%s (resets 1 PM Dhaka)\n",
+		tasks, maxTasks, artist, limitLabel(artistMax), playlist, limitLabel(playlistMax))
 }
 
 func quotaLinePlain(tasks, maxTasks, artist, artistMax, playlist, playlistMax int) string {
-	return fmt.Sprintf("\n📊 Quota: tasks %d/%d in flight · today: artist %d/%d · huge-playlist %d/%d (resets 1 PM Dhaka)\n",
-		tasks, maxTasks, artist, artistMax, playlist, playlistMax)
+	return fmt.Sprintf("\n📊 Quota: tasks %d/%d in flight · today: artist %d/%s · huge-playlist %d/%s (resets 1 PM Dhaka)\n",
+		tasks, maxTasks, artist, limitLabel(artistMax), playlist, limitLabel(playlistMax))
 }
 
 // userIDByUsername resolves a @username to a user ID by scanning recorded stats

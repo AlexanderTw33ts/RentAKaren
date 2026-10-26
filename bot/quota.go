@@ -77,7 +77,7 @@ func (b *TelegramBot) quotaCheckAndCharge(userID int64, username, kind string) (
 	// isUserDonor takes stateMu — resolve it BEFORE taking quotaMu (leaf order: the
 	// two are never nested).
 	donor := b.isUserDonor(userID, username)
-	limit := heavyRipLimit(kind, donor)
+	limit := b.ripLimit(kind, donor)
 	day := quotaDay(time.Now())
 	key := quotaKey{userID: userID, day: day, kind: kind}
 
