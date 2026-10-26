@@ -1,131 +1,155 @@
-# Karen — Apple Music Telegram Bot
 
-## Project structure
-- `bot/` — Go binary (module `main`, Go 1.25.5), entrypoint `main.go`
-- `bot/utils/wmclient/` — HTTP client for wrapper-manager v2 + local Temari decryption
-- `wrapper-manager/` — Dockerfile to build [WorldObservationLog/wrapper-manager](https://github.com/WorldObservationLog/wrapper-manager)
+<div align="center">
 
-## Quick start
-```bash
-cp .env.example .env
-# edit .env (secrets + APPLE_ID_N/APPLE_PASS_N pairs), then one-time bootstrap:
-./setup.sh
+# 💅 Karen
+
+### When your AI agent can't get through to the manager.
+
+**The human escalation layer for AI agents.**
+
+[![Website](https://img.shields.io/badge/Website-rentakaren.ai-FF4F87?style=for-the-badge&logo=googlechrome&logoColor=white)](https://rentakaren.ai)
+
+[![AI Agents](https://img.shields.io/badge/Built_for-AI_Agents-7C5CFC?style=flat-square)](https://rentakaren.ai)
+[![Human Escalation](https://img.shields.io/badge/Human-Escalation-219653?style=flat-square)](https://rentakaren.ai)
+
+</div>
+
+---
+
+## 💬 What is Karen?
+
+AI agents can navigate websites, fill out forms, follow instructions, and automate complex workflows.
+
+But sometimes they hit a wall.
+
+The chatbot keeps repeating itself. Support won't escalate the ticket. The automated process has no path to a real decision-maker.
+
+**Karen is for when your AI agent needs a human to take over.**
+
+[RentAKaren.ai](https://rentakaren.ai) is built around connecting agent-driven workflows with human assistance when automation alone isn't enough.
+
+## ✨ The problem Karen solves
+
+| | Challenge | The goal |
+|:---:|---|---|
+| 🤖 | Automation gets stuck | Escalate when self-service fails |
+| 📞 | A task requires a conversation | Bring in human assistance |
+| 💪 | Support won't budge | Pursue a meaningful response |
+| 🤝 | The situation needs judgment | Put a human in the loop |
+| 🎯 | The task remains unresolved | Focus on outcomes, not endless retries |
+
+## 🔄 The workflow
+
+```mermaid
+flowchart TD
+    A["🤖 AI agent receives a task"] --> B["⚙️ Attempts automated resolution"]
+    B --> C{"Task resolved?"}
+    C -- "Yes" --> D["✅ Done"]
+    C -- "No" --> E["💅 Escalate to Karen"]
+    E --> F["🧑 Human assistance"]
+    F --> G["🎯 Work toward resolution"]
+
+    style A fill:#E8F0FF,stroke:#5585FF,color:#173A7A
+    style B fill:#F0F0FF,stroke:#8585FF,color:#383875
+    style C fill:#FFF0D9,stroke:#E5A33B,color:#754600
+    style D fill:#D7F5E5,stroke:#219653,color:#155C35
+    style E fill:#FFE4EE,stroke:#FF4F87,color:#9C1749
+    style F fill:#E4F8ED,stroke:#37A66B,color:#155C35
+    style G fill:#D7F5E5,stroke:#219653,color:#155C35
 ```
 
-## Config — .env is the single source of truth
-- Edit `.env` only. `./generate.sh` reads it and writes `bot/config.yaml` + `docker-compose.override.yml`; both are GENERATED — never hand-edit.
-- All `APPLE_ID_N`/`APPLE_PASS_N` pairs are logged into one wrapper-manager v2 gateway at `karen-wrapper-manager:8080`; its account count drives Karen's track concurrency.
-- `storefront` is fixed to `us` in the generator (not in `.env`). Authoritative non-secret config values live in `generate.sh`'s heredoc, NOT `bot/config.yaml.example` (kept only as human reference and may drift).
-- `setup.sh` = full bootstrap (generate + build + HTTP account reconciliation/login + start). Re-run it when the account list changes; 2FA is prompted interactively when required.
-- Bot rebuild detection is automatic. `setup.sh` always lets Docker inspect the tightly scoped `bot/` build context: bot-code changes rebuild, while generated config/account/runtime-state changes hit the existing compiled layer. No special build flag is needed.
-- Gitignored: `.env`, `docker-compose.override.yml`, `bot/config.yaml`, `bot/state/`, `bot/downloads/`, `.logins/v3-accounts.txt`.
+## 🧠 Design principles
 
-## Day-2 operations (steady state)
-| Goal | Action |
-| --- | --- |
-| Ship a code/script change | `git push origin main` — deploy SSHes in, `git reset --hard origin/main`, regenerates config, rebuilds bot |
-| Add / remove Apple accounts | edit `.env` on the VPS, then `./setup.sh` (logs in only NEW accounts) |
-| Force fresh login of all accounts | `RELOGIN=1 ./setup.sh` |
+- **Agent-first:** Let the AI attempt the task before escalating.
+- **Human-in-the-loop:** Recognize when judgment, communication, or persistence requires a person.
+- **Context-rich handoffs:** Give the human the objective, relevant background, previous attempts, and constraints.
+- **Outcome-oriented:** Define what success looks like before work begins.
+- **Responsible execution:** Respect authorization boundaries, privacy, and explicit user approval requirements.
 
-- **No manual `git pull` on the VPS, ever.** The deploy's `git reset --hard origin/main` syncs tracked files. `.env`, the generated Compose override, manager data volume, and `.logins/v3-accounts.txt` survive it.
-- **Login is idempotent.** `setup.sh` submits every configured username; wrapper-manager's `already login` response is treated as success. Removed usernames recorded in `.logins/v3-accounts.txt` are logged out. `RELOGIN=1` explicitly logs current accounts out first.
-- **`.env` is parsed literally, never `source`d.** A password with `$`/backtick/`\` would be shell-expanded and break under `set -u`. `generate.sh`/`setup.sh` have a `load_env()` that strips only outer quotes and takes the value verbatim. Proven on a `$`-containing password (wm-2).
-- **Compose runs with `--env-file /dev/null`** (in `setup.sh` and `deploy.yml`) so it doesn't parse the secrets `.env` for `${VAR}` interpolation (a `$` in a password warned "variable is not set"). Our compose files use literal values only.
+## 🛠️ Developer guide
 
-## CLI flags (binary has two modes)
-- `--bot` — Telegram bot mode (production)
-- `--search [album|song|artist] <query>` — interactive search
-- `--atmos` / `--aac` — quality override
-- `--select` — interactive track selection
-- `--song` — single song from album URL
-- `--all-album` — download all artist albums
-- `--debug` — print quality info without downloading
-- Default: pass Apple Music URLs directly as args for CLI download
+This repository should document the implementation of Karen's human-escalation workflow.
 
-## Architecture
-- **Single sequential download worker** — `startDownloadWorker()` reads from a buffered chan (cap 20). One download at a time due to package-level globals.
-- **HTTP + local Temari decryption** — `bot/utils/wmclient/client.go` calls wrapper-manager v2's JSON endpoints. `DownloadAndDecrypt()` downloads fMP4 segments via HLS, obtains `/key` templates, decrypts sample batches locally through Temari's Go binding, and remuxes with `ffmpeg -c copy`.
-- **Post-release reconciliation** — after every album's first pass, `reconcileRelease()` compares the selected track numbers against the per-rip in-memory completion ledger (so it still works after mid-rip Gofile flushes delete source files). The all-green path is an O(tracks) memory scan. Ordinary failures get one concurrent retry after partial outputs are removed; known-unavailable tracks are not retried. Any final gaps are reported to the user while completed files still deliver normally.
-- **Multi-account gateway** — one wrapper-manager supervises one lightweight `wrapper-lite-rootless` process per Apple account and routes requests by region. Karen reads `/status.clientCount` to retain its account-sized concurrent track budget.
-- **Three delivery modes** (user picks via inline keyboard):
-  1. Telegram Bot API — single tracks <50MB
-  2. MTProto (`gotd/td`) — ZIP up to 2GB; session in `mtproto-session.json`
-  3. Gofile — fallback for oversized packages
-- **Mid-rip Gofile flush** — for huge rips (discographies, big playlists) the track-launch loops in `main.go` (`ripAlbum`/`ripPlaylist`/`ripStation`) call `rs.checkpointFlush(ctx, wg.Wait)`: once accumulated files exceed `rip-flush-threshold-gb` (default 20, env `RIP_FLUSH_THRESHOLD_GB`, negative disables), it drains in-flight tracks, zips+uploads the chunk to Gofile as `… (Part N).zip`, and deletes the source files to free disk. Plumbing lives on `RipState` (`ripstate.go`); the callback is `flushChunkToGofile` in `telegram_bot.go`. Once any chunk flushes, the remainder is forced to Gofile too. Requires `task-concurrency` (per-rip `RipState`); off on the CLI/single-track path.
-- **Artist rips** — always ONE queue job (`runArtistRip` in `admin_tasks.go`), never a per-release fan-out. The `/profile` "Artist zip" pref picks delivery: `combined` accumulates the whole discography into one final ZIP; otherwise (default) each release ships as its own Gofile ZIP via `rs.flushReleaseBoundary(ctx, albumName)` (an unconditional sibling of `checkpointFlush` that labels the chunk with the album name), reclaiming each release's disk before the next. The 20 GB valve composes underneath either way via the shared flush cursor (splits whatever unit exceeds the threshold into `Part N` chunks). Music-video scope stays per-item (MVs don't combine).
-- Bot API (long-polling `getUpdates`) for receiving messages; MTProto only for file uploads
-- **Admin (sudo) commands** (`isAdmin`, hidden from `/help`): `/auth` & `/unauth` with no arg toggle the global admins-only lockdown; with an `<id>` (numeric Telegram ID **or** `@username`) they un-ban / ban a single user — `/unauth <id>` revokes access (gated in `handleMessage`/`handleCallback` via `isBlockedUser`; the user gets one notice then silence), `/auth <id>` restores it. Admins can never be blocked. `/purge` wipes the download cache; `/sys` (`bot/sysstatus.go`) posts a CPU/RAM/disk/uptime card plus a Cloudflare speed test, all read from `/proc` + `syscall.Statfs` (no new deps). `/p <id>` & `/d <id>` (numeric ID **or** `@username`) grant / revoke **donor** status (`isUserDonor`/`setUserDonor`, stored in `donorUserIDs`/`donorUsernames` alongside the ban sets).
-- **Donor perks** (no content is ever gated — perks are convenience/recognition only): a ⭐ badge wherever the user is shown (live status board `formatProgressRich`/`formatHeader`, `/scheduled` board, `/profile` root); own-DM access (the `Chat.Type == "private"` gate in `handleMessage`/`handleCallback` admits admins + donors); a higher concurrent-task ceiling (5 vs 3, in the `/dl` handler); higher pending heavy-job caps in `scheduleOrRun` (discography 2 vs 1, huge playlist 3 vs 2, counted by `countPendingScheduled`); and a one-slot bump up the scheduled-rip queue (`scheduleJob(j, donor)` inserts just before the tail instead of appending). No sleeptime skip.
+Before integrating Karen into an agent, establish the following:
 
-- **Restriction mode** (`bot/restriction.go`, admin `/restrict [on|off]`, hidden): a temporary valve, **OFF by default** (a deploy changes nothing). While ON, non-admin non-donor members get 20 albums/day + 2 playlists/day (≤100 tracks; larger ones and ALL artist/discography rips are refused), unlimited songs/MVs/stations; donors are unlimited (`ripLimit` returns `quotaUnlimited`), admins are never gated. Albums/playlists reuse the per-day quota engine (`quotaCheckAndCharge` kinds `album`/`playlist`, charged in `enqueueAlbumDownload`/`enqueuePlaylistDownload` via `admitRestricted`, committed/refunded like heavy rips). Persisted as `restriction_mode` in `telegram-state.json`. When OFF the old always-on `heavyRipLimit` caps still apply. Donor-only DMs are unchanged and independent of the valve.
+- **Entry point:** How an agent initiates an escalation.
+- **Task specification:** How the desired outcome, context, and constraints are represented.
+- **Handoff mechanism:** How work moves from the agent to a human.
+- **Status tracking:** How an agent learns whether a task is pending, in progress, or complete.
+- **Result delivery:** How the human's findings or outcome return to the requesting agent.
+- **Authentication and permissions:** How agents and users are authorized to request actions.
 
-## State & persistence (`bot/state/`)
-- **All JSON state lives in one directory mount: `./bot/state:/app/state`** (`docker-compose.yml`). It holds three files:
-  - `telegram-cache.json` — Telegram `file_id` cache (re-send without re-upload).
-  - `telegram-state.json` — admin lock + per-user `/profile` rip prefs (`UserPrefs map[int64]*UserPrefs`) + per-user bans (`blockedUserIDs` / `blockedUsernames`, set via `/unauth <id>`) + donors (`donorUserIDs` / `donorUsernames`, set via `/p <id>`). This is the **important** data — the only thing the daily backup ships.
-  - `telegram-schedule.json` — queued sleeptime-window jobs. Persisted (so the scheduler survives restarts) but **not** backed up; gitignore + ephemeral by design.
-- **Why a directory mount, not three single-file mounts:** saves are atomic (write `<file>.tmp` → `os.Rename` over target). A single-file bind mount puts `.tmp` on the container overlay fs while the target is a separate device, so `os.Rename` returns `EXDEV` and the host file silently never updates. A dir mount keeps tmp+target on the same fs. This was a real bug: it's why the scheduler "never delivered" (jobs only lived in memory, wiped on every deploy) and why the cache never persisted. Mount the *directory* of any file you save with tmp+rename — never the file.
-- `generate.sh` does `mkdir -p bot/state` (not `touch` a file) so Docker mounts a directory.
-- Paths derive from `cacheFile` (default `state/telegram-cache.json`) in `newTelegramBot`; `stateFile`/`scheduleFile` are siblings in the same dir.
-- **Daily backup:** `startBackupRoutine`/`performBackup` (`bot/admin_tasks.go`) DM every `ADMIN_IDS` a copy of the admin-lock + profiles + per-user bans + donors (a `karen-state-YYYY-MM-DD.json` document) once a day at **04:00 Dhaka**. The next fire time is computed from the wall clock, so frequent restarts don't spam backups. Worst-case data loss on a VPS wipe is one day. Schedule jobs are deliberately excluded from the backup.
-- **Restore is automatic.** On boot, if `telegram-state.json` is missing/empty but one or more `karen-state-*.json` backups sit in the state dir, `loadState` → `restoreFromBackupLocked` loads the newest (dates sort lexically) and promotes it to `telegram-state.json`. So a migration is just: drop the backup file in `bot/state/` before first boot. (Manual restore — renaming the backup to `telegram-state.json` yourself — still works and is equivalent.)
-- Legacy orphans: old `bot/telegram-cache.json` / `bot/telegram-state.json` host files (pre-dir-mount) are unused; harmless, can be `rm`'d on the VPS.
+Refer to the project's actual source code and documentation for supported interfaces, configuration, and deployment instructions.
 
-## Docker services
-- `docker-compose.yml` (tracked) defines the bot. `docker-compose.override.yml` (generated, gitignored) adds `karen-wrapper-manager`, port `127.0.0.1:8080`, and the fresh `wm-data-v3` volume.
-- The old `wm-data-N` volumes are intentionally not deleted during migration and can be retained for rollback.
+## 📁 Project structure
 
-## Wrapper-manager setup (handled by setup.sh)
-- `./setup.sh` builds the pinned manager and a tiny stdlib-only `karen-login:local` helper, starts the gateway, reconciles removed accounts, and uses `POST /login` for every configured account. Credentials are read from a read-only `.env` mount and never placed in argv/Compose.
-- `.logins/v3-accounts.txt` stores only the previously managed usernames so setup can call `/logout` for removed accounts. It is gitignored.
-- 2FA is handled by the manager's two-phase login flow; the helper prompts on stdin only when Apple requests a code.
-- Wrapper-manager needs `--privileged` because `wrapper-lite-rootless` uses user namespaces and chroot.
+The repository structure and implementation details should reflect the current codebase.
 
-## Required external binaries (bundled in Docker)
-- `ffmpeg` — fMP4 to flat MP4 remuxing, format conversion
-- GPAC base image provides additional tooling
+A useful high-level organization for an agent escalation service could be:
 
-## Gotchas
-- Temari's native `libtemari.so` is copied explicitly from its Go module into the final bot image and loaded from `/usr/local/lib/libtemari.so`.
-- AAC-LC uses the manager's HTTP `/webplayback` endpoint.
-- ALAC/Atmos uses HTTP `/m3u8` + `/key`; Temari decrypts locally in parallel sample batches.
-- MTProto peer cache is in-memory only; lost on restart
-- `bot/utils/gofile.go` hardcodes `upload-ap-sgp.gofile.io`
-- Fork of [moeleak/apple-music-downloader-bot](https://github.com/moeleak/apple-music-downloader-bot); upstream commits may be relevant for porting
+```text
+karen/
+├── README.md             # Project overview and developer guide
+├── docs/                 # Integration and usage documentation
+├── integrations/         # Agent and platform integrations
+├── api/                  # API interfaces, if applicable
+├── examples/             # Example agent workflows
+└── tests/                # Automated tests
+```
 
-## Known issues
-- Progress bar is cosmetic (estimate-based, not accurate). Known display bug FIXED 2026-06-20 (commit `46b747b`): the upload board collapsed to "7.00MB / 7.00MB" for multi-tens-of-MB tracks because `finishedSizes` took the latest reported per-track `total`, which the HLS-segment download path leaves at 0 and the post-download phases (`Decrypting`/`Converting`/`Remuxing`, 0/1 sentinels) clobber. Fixed with a per-track `maxBytes` high-water mark in `trackProgressState` (`telegram_bot.go`). Files always delivered correctly — it was purely the gauge, so treat any pre-fix board speed/size numbers as unreliable.
-- No retry logic on failed segment downloads
-- **MTProto upload sawtooth on DC5 — DIAGNOSED + MITIGATED (stable at `uploadThreads = 16`), but still single-connection-bound.** Large uploads were dropping with `engine forcibly closed: context canceled`. Root cause (confirmed via gotd's zap logger): `pingLoop: disconnect (pong missed): write tcp …91.108.56.112:443: i/o timeout` — the in-flight upload window saturates the single-connection TCP send buffer to DC5 (Singapore, ~176 ms RTT, near its bandwidth-delay product), so gotd's keepalive ping write times out → engine torn down → in-flight parts canceled. The resumable uploader + `withUploadRetryN` rides it out (each retry resumes at a higher part number), so files **do** deliver. Ruled out: not FloodWait (no 429/FLOOD_WAIT), not bandwidth (39↑/72↓ MB/s measured), not MTU/routing, not resources, not duplicate sessions, not the bot token.
-  - **Fix deployed (2026-06-19):** raised the per-socket send buffer via `net.ipv4.tcp_wmem=4096 262144 16777216` (16MB max) — set in `docker-compose.yml`'s `sysctls:` on the `bot` service (it's net-namespaced, so a host sysctl won't reach the container; this deploys via the normal push→main pipeline). Verified live in the container.
-  - **Thread experiment CONCLUDED (2026-06-19):** with the 16MB buffer, `uploadThreads = 16` (8 MB in flight) is the **stable ceiling** — clean log over a full 168 MB upload. `20` (10 MB in flight) RE-INTRODUCED the teardown (`dc_id=5 … forcibly closed` on part 197), so it was reverted to `16` (commit `6b64899`). gotd serializes RPC writes over ONE TCP connection, so it's **protocol-saturated at 16** — more threads re-starve the keepalive without buying speed. **Do NOT raise `uploadThreads` above 16** without a further buffer increase AND a re-test for `pong missed` / `forcibly closed`.
-  - **To actually beat moderate throughput** (a reference Pyrofork bot hits 40-50 MB/s) you need a **multi-connection** upload path — Telegram parallel upload = separate TCP connections to the DC, which `WithThreads(n)` does NOT provide (it multiplexes one socket). Options: a Go-native connection pool, or a Pyrofork sidecar (`max_concurrent_transmissions`). **Decision still open** — operator is wary of running multiple MTProto clients on one bot account.
-  - gotd v0.144.0 does NOT expose ping/pong timeout in `telegram.Options` (hardcoded in `mtproto/ping.go`), so the keepalive can't be relaxed without forking. Other levers: `ReconnectionBackoff` (shrinks dead time, exposed in Options), or make `uploadThreads` a config field (default 16) to tune per-VPS/per-DC. The gotd zap logger that surfaced this is wired in `mtproto.go` (`mtprotoLogger()`, Info level) — verbose but invaluable; keep or gate behind a debug flag.
-- ~~`mtproto-session.json` is NOT in a compose volume~~ **FIXED** — the session now lives in the bind-mounted state dir (`state/mtproto-session.json`). `newTelegramBot` passes the cache-file's dir (default `state/`) to `NewMTProtoClient` instead of `"."`, so it survives `--build` deploys. (Bot tokens re-auth non-interactively anyway, so this was always cosmetic — but it stops the `Generating new auth key` churn.)
+*Illustrative layout only; update this tree to match the actual repository.*
 
-## Build & deploy (read before touching a branch)
-- **Never build locally.** The only Go module is `bot/go.mod` (module `main`, Go 1.25.5); `wrapper-manager/` is NOT a Go module. Don't run `go build`/`go vet`/`gofmt` on the dev box — push and let GitHub compile.
-- **CI compile gate:** `.github/workflows/build-check.yml` runs `go build ./...` (working-dir `bot/`, Go version read from `bot/go.mod`) on **feature-branch pushes and all PRs** (pushes to `main` are excluded — Deploy's own `--build` is the gate there). Green = it compiles. This is the ONLY automated compile check — there is no test suite.
-- **Deploy:** `.github/workflows/deploy.yml` triggers **only on push to `main`**. It SSHes to the VPS and runs `git fetch origin main` → `git reset --hard origin/main` → `docker compose up -d --build bot`. It never references any other branch, so feature-branch pushes are deploy-safe.
-- **Branch workflow:** do work on a feature branch (e.g. `UX`) → push → confirm "Build Check" is green on the GitHub Actions page → merge to `main` (PR or fast-forward) → the `main` push deploys. A feature branch can never reach prod until you deliberately merge it.
-- **Gotchas when committing here:** the shell mangles pasted multi-line `-m "$(cat <<EOF …)"` commit messages (indentation breaks the heredoc; wrapped lines make `git` see `-m` with no value). Use a single-line `-m`, or several `-m` flags each on ONE physical line.
-- **`gh` CLI is installed** (v2.94+) — use `gh run list`/`gh run watch` to check CI, `gh pr create`/`gh pr merge` to ship. Note `gh pr view --json` has no `merged` field; use `state,mergedAt,mergeCommit`.
+## 🚀 Getting started
 
-## Fresh-VPS migration (the whole point of bootstrap.sh + containerized login)
-Everything runs in containers, so the host only needs Docker + git — nothing else, on any distro. The flow:
-1. **Read access for the VPS** (repo is private): generate an SSH key on the box, add its pubkey as a repo **Deploy key** (read-only), point `~/.ssh/config` at it, and `ssh-keyscan github.com >> ~/.ssh/known_hosts` (the automated deploy fetches non-interactively).
-2. `git clone git@github.com:spideyonmoon/karen.git ~/karen` (must be `~/karen` — `deploy.yml` does `cd ~/karen`).
-3. `./bootstrap.sh` — installs Docker + git (idempotent; no Python).
-4. `cp .env.example .env && nano .env` — secrets + `APPLE_ID_n`/`APPLE_PASS_n` pairs.
-5. (optional) drop the latest `karen-state-*.json` into `bot/state/` → profiles/donors/bans auto-restore on first boot.
-6. `./setup.sh` — builds images (incl. `karen-login:local`), boots wrappers, logs in each account (containerized — **no host Python**), starts the bot.
-7. **Wire up CD:** add the Actions key's pubkey to `~/.ssh/authorized_keys`, and update GitHub repo secrets `VPS_HOST` (new IP) / `VPS_USER` / `VPS_SSH_KEY`. Push to `main` to confirm deploy works.
+Visit [rentakaren.ai](https://rentakaren.ai) to learn about Karen.
 
-Two key relationships not to conflate: **Actions→VPS** (secret `VPS_SSH_KEY`, pubkey in VPS `authorized_keys`) vs **VPS→GitHub** (deploy key on the repo, private key on the VPS — needed because the repo is private and the deploy fetches on the box).
+For developers, start by identifying the supported integration method and the configuration required by the current implementation.
 
-## Branches
-- `main` — production branch
-- `v3` — wrapper-manager v2 HTTP + local Temari migration branch
-- `v1-stable` — frozen snapshot of the pre-overhaul code (single-account wrapper, MP4Box remux, serial downloads). The legendary v1. Preserved for reference; do not target new work here.
-- `v1.0.0` — git tag pointing at the same commit as `v1-stable`, visible on the GitHub Releases page.
-- See `SESSION_HISTORY.md` for the full migration log.
+Do not add API keys, credentials, or other secrets to source control. Store sensitive configuration in environment variables or an appropriate secrets manager.
+
+## 🔐 Security and responsible use
+
+Human escalation can involve sensitive information and real-world actions.
+
+Integrations should:
+
+- Share only the information necessary to complete the task.
+- Verify that the requesting agent is authorized.
+- Respect user-defined spending limits and action boundaries.
+- Require explicit approval for consequential actions when appropriate.
+- Keep task status and outcomes transparent to the requesting agent.
+- Avoid promising a successful resolution before it has been confirmed.
+
+## 💡 Why Karen?
+
+> The future of AI isn't just agents that can do everything themselves.
+>
+> It's agents that know when to bring in someone who can.
+
+Sometimes the next step isn't another prompt, another retry, or another support ticket.
+
+Sometimes you need someone who can pick up the phone, keep asking, and get through to the manager.
+
+**That's Karen.** 💅
+
+---
+
+## 🔗 Links
+
+- 🌐 **Website:** [rentakaren.ai](https://rentakaren.ai)
+- 📚 **Documentation:** [Check the website for available documentation](https://rentakaren.ai)
+- 🐛 **Issues and contributions:** Use this repository's GitHub issue tracker and contribution process, if enabled.
+
+---
+
+<div align="center">
+
+### Let the agent try first.
+
+### When it can't get through to the manager, rent a Karen.
+
+[![Rent a Karen](https://img.shields.io/badge/Rent_a_Karen-FF4F87?style=for-the-badge)](https://rentakaren.ai)
+
+<sub>💅 Karen — the human escalation layer for AI agents.</sub>
+
+</div>
