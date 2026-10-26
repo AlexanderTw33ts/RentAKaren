@@ -1,111 +1,158 @@
-# Karen
 
-Karen pulls lossless audio off Apple Music and delivers it to your Telegram chat — ALAC, Dolby Atmos, or AAC, with cover art and metadata baked in. Under the hood she's a **read-through catalog**: anything ripped once is stored in a private Telegram channel and copied back instantly the next time anyone asks. Popular music gets ripped exactly once and delivered forever.
+<div align="center">
 
-A docs site is on the way. Until then this readme is the short version — enough to understand it and get it running.
+# 💅 Karen
 
-## What she does
+### When your AI agent can't get through to the manager.
 
-- **Lossless and then some** — ALAC up to 192 kHz, Dolby Atmos, AAC-LC, optional FLAC conversion. Music videos too.
-- **Ripped once, served forever** — a catalog backed by a private Telegram dump channel. The first request for a track rips it; every request after that copies the stored file straight back, no re-ripping. A half-cached album only fetches the tracks it's missing.
-- **Parallel everything** — wrapper-manager routes work across multiple Apple Music accounts while Temari decrypts locally across CPU cores, and a pool of helper bot accounts uploads in parallel.
-- **Delivery that fits** — files arrive as clean copies (no "forwarded from" header). Tracks, a zip, or a Gofile link depending on size; huge discographies are flushed to Gofile in numbered parts mid-rip, so a rip never has to fit on disk all at once.
-- **Per-user profiles** — save your codec, quality, and delivery preferences once and `/dl` runs with zero flags and zero prompts.
-- **Made to run unattended** — concurrent download scheduler, live per-task status boards, a queue, bulk `/dl`, inline search, and a full admin/sudo toolkit (bans, usage stats, restart, system status).
+**Your agent handles the machine. Karen handles the humans.**
 
-## How it works
+[![Website](https://img.shields.io/badge/Website-rentakaren.ai-FF4F87?style=for-the-badge&logo=googlechrome&logoColor=white)](https://rentakaren.ai)
 
-Karen treats Telegram itself as the storage layer. Every file she's produced lives in a private dump channel; a small Postgres catalog holds *pointers* to those messages — never the bytes themselves. So a request is, first and foremost, a lookup:
+[![Human Escalation](https://img.shields.io/badge/AI_Agents-Human_Escalation-7C5CFC?style=flat-square)](https://rentakaren.ai)
+[![Built for Agents](https://img.shields.io/badge/Built_for-AI_Agents-219653?style=flat-square)](https://rentakaren.ai)
 
-```
-request → resolve to track IDs → catalog lookup (per track)
-  ├─ HIT   → copy the stored file straight to you  (no rip, no re-upload — instant)
-  └─ MISS  → rip it → upload to the dump → index it → copy it to you
-```
+*The human escalation layer for AI agents.*
 
-The pieces behind that flow:
+</div>
 
-```
-   ┌──────────┐   /dl url     ┌────────────────────┐
-   │ Telegram │ ────────────▶ │      Bot (Go)      │ ──lookup──▶ Postgres
-   │   user   │ ◀──────────── │  orchestrator +    │ ◀──pointers─ (catalog)
-   └──────────┘  clean copy   │  delivery          │
-                              └──┬──────────────┬──┘
-                       rip + decrypt        upload in parallel
-                                │              │
-                     ┌──────────▼─────┐  ┌─────▼──────────────┐
-                     │ wrapper-mgr v2 │  │  helper-bot pool   │
-                     │ HTTP gateway   │  │  → dump channel    │
-                     │ many accounts  │  │  (stores the bytes)│
-                     └────────────────┘  └────────────────────┘
-```
+---
 
-- **wrapper-manager v2** — one HTTP gateway supervising lightweight `wrapper-lite` processes, one per Apple account. It supplies playlists, licenses, lyrics, and FairPlay key context and routes around unavailable regions/accounts.
-- **helper-bot pool** — extra bot accounts that upload to the dump channel in parallel, dividing both wall-time and FLOOD_WAIT pressure across accounts.
-- **catalog** — Postgres (managed on Supabase) holding pointer rows keyed by Apple track ID + format tier. This is the lookup that turns repeat requests into instant copies.
-- **bot** (Go) — fetches playlists over HTTP, downloads HLS segments in parallel, decrypts them locally through Temari's Go binding, remuxes with ffmpeg, and copies the result to you with no trace of the dump.
+## 💬 The problem
 
-The catalog and helper pool are optional. With neither configured, Karen falls back to the original behavior: rip on demand and upload directly.
+AI agents can reason, negotiate, fill out forms, and navigate support flows.
 
-## Quick start
+But what happens when the chatbot goes in circles, the support ticket goes nowhere, and nobody will connect you to someone who can actually make a decision?
 
-You'll need a Linux host with Docker, a Telegram bot token, and at least one Apple Music account. Two-factor login is supported interactively during setup.
+**You get a Karen. 💅**
 
-```bash
-git clone https://github.com/spideyonmoon/karen.git ~/karen
-cd ~/karen
-cp .env.example .env   # fill in tokens + one APPLE_ID_N / APPLE_PASS_N per account
-./setup.sh
-```
+[RentAKaren.ai](https://rentakaren.ai) is built around a simple idea: when an AI agent can't finish a task on its own, bring in a human who can help get it done.
 
-`.env` is the single source of truth. `setup.sh` generates config, builds one multi-account manager and the Temari-enabled bot, reconciles the account list, logs in new accounts, and starts everything. Sessions persist in the `wm-data-v3` volume. Removed accounts are logged out on the next setup run; `RELOGIN=1 ./setup.sh` refreshes every current account.
+Your agent tries first. Karen steps in when automation hits a wall.
 
-The v3 migration intentionally uses a new volume. Old `wm-data-N` volumes are not deleted, so the previous backend remains recoverable until you deliberately remove those volumes.
+---
 
-The catalog and parallel-upload pool are opt-in: add `HELPER_BOT_TOKENS`, `DUMP_CHANNEL_ID`, and `DATABASE_URL` to `.env` to turn them on (channel setup details will live in the docs site).
+## ✨ What Karen does
 
-## Usage
+| | Capability | What it means |
+|:---:|---|---|
+| 🤖 | **Automation fallback** | Escalate when the agent exhausts self-service options. |
+| 📞 | **Human intervention** | Get help with tasks requiring calls, conversations, or direct follow-up. |
+| 💪 | **Escalation** | Push past scripted responses and dead-end support flows. |
+| 🤝 | **Negotiation** | Bring human judgment to situations where automated messages aren't enough. |
+| 🎯 | **Outcome-oriented** | Focus on resolving the problem, not opening another ticket. |
 
-```
-/dl <url> [flags]     rip a song, album, playlist, or artist
-/profile              set saved prefs so /dl needs no flags
-/status               active task + queue
-/stop_<id>            cancel a task
-@bot <keywords>       inline song search
+---
+
+## 🔄 How it works
+
+```mermaid
+flowchart TD
+    A["🤖 AI agent encounters a problem"] --> B["⚙️ Attempts automated resolution"]
+    B --> C{"Is it resolved?"}
+    C -- "Yes" --> D["✅ Task complete"]
+    C -- "No" --> E["💅 Escalate to Karen"]
+    E --> F["🧑 Human takes over"]
+    F --> G["🎯 Work toward resolution"]
+
+    style A fill:#E8F0FF,stroke:#5585FF,color:#173A7A
+    style B fill:#F0F0FF,stroke:#8585FF,color:#383875
+    style C fill:#FFF0D9,stroke:#E5A33B,color:#754600
+    style D fill:#D7F5E5,stroke:#219653,color:#155C35
+    style E fill:#FFE4EE,stroke:#FF4F87,color:#9C1749
+    style F fill:#E4F8ED,stroke:#37A66B,color:#155C35
+    style G fill:#D7F5E5,stroke:#219653,color:#155C35
 ```
 
-Common flags: `-aac`, `-atmos`, `-flac`, `-art`, plus delivery overrides `-tgu` / `-tgz` / `-go`. Admins also get bans, usage stats, system status, and restart controls.
+**The idea is simple:** don't make your AI agent give up just because the next step requires a human.
 
-```
-/dl https://music.apple.com/album/123456
-/dl https://music.apple.com/album/123456 -atmos -tgz
-```
+---
 
-## Layout
+## 🚧 When automation hits a wall
 
-```
-bot/               Go service — orchestration, delivery, profiles, admin
-  catalog/         Postgres read-through catalog (pointer rows) + indexer
-  pool.go          helper-bot upload pool → dump channel
-  utils/wmclient/  wrapper-manager HTTP client + local Temari decryption
-wrapper-manager/   pinned upstream v2 HTTP gateway image
-setup.sh           one-shot bootstrap: generate → build → login → start
-generate.sh        renders config.yaml + docker-compose from .env
-```
+### 🎧 Customer support
 
-## Built on the shoulders of
+Your agent has tried the FAQ, help center, chatbot, and support form. Nothing works. Karen helps take the issue beyond the automated front door.
 
-Karen wouldn't exist without the work of others. Standing on, forked from, and inspired by:
+### 💰 Negotiation
 
-- [WorldObservationLog/wrapper-manager](https://github.com/WorldObservationLog/wrapper-manager) and [/wrapper](https://github.com/WorldObservationLog/wrapper) — the hooked Apple Music backend
-- [WorldObservationLog/Temari](https://github.com/WorldObservationLog/Temari) — local FairPlay decryption library and Go binding
-- [WorldObservationLog/AppleMusicDecrypt](https://github.com/WorldObservationLog/AppleMusicDecrypt) — reference implementation for the modern HTTP/Temari architecture
-- [zhaarey/apple-music-downloader](https://github.com/zhaarey/apple-music-downloader) — the original downloader
-- [moeleak/apple-music-downloader-bot](https://github.com/moeleak/apple-music-downloader-bot) — Telegram bot groundwork
-- [irisXDR/NEO-WZML](https://github.com/irisXDR/NEO-WZML) — bot UX inspiration
+Your agent knows what it wants but can't get a meaningful response. A human can communicate, make the case, and negotiate toward a resolution.
 
-Special thanks to **Akash Mitra**.
+### 🏛️ Bureaucracy and red tape
 
-## License
+Some processes require persistence, judgment, and direct human communication. Karen helps bridge the gap between digital automation and the real world.
 
-GPL-3.0 — see [LICENSE](LICENSE). This is a personal and educational project; respect Apple Music's terms and the rights of artists, and own how you use it.
+### 🌍 Real-world follow-through
+
+When a task needs a conversation, local context, or someone willing to take the next step, Karen provides a path to human assistance.
+
+---
+
+## 🧠 Built for AI agents
+
+Karen treats human assistance as another step in completing a task — not a failure state.
+
+A useful handoff should include:
+
+- 🎯 **Objective** — what needs to happen.
+- 📝 **Context** — what the agent has already tried and what happened.
+- 🚧 **Constraints** — deadlines, budget, boundaries, and approval requirements.
+- ✅ **Success criteria** — what counts as a resolution.
+
+The better the handoff, the less time a human spends reconstructing the problem and the more time they can spend solving it.
+
+---
+
+## 🛠️ Designed for the agentic era
+
+AI agents are increasingly capable of operating software, navigating websites, and executing complex workflows.
+
+But the world isn't entirely programmable.
+
+Some organizations hide behind automated support systems. Some decisions require a conversation. Some problems need persistence, judgment, and a person willing to follow through.
+
+Karen represents the human fallback for these situations.
+
+**When software can't solve the problem, escalate beyond software.**
+
+---
+
+## 💡 The philosophy
+
+> The future of AI isn't just agents that can do everything themselves.
+>
+> It's agents that know when to bring in someone who can.
+
+Intelligence alone doesn't grant access, authority, persistence, or a human voice.
+
+Sometimes you need someone who can pick up the phone.
+
+Sometimes you need someone who can keep asking.
+
+Sometimes you need someone who can get past the script and talk to the manager.
+
+**That's Karen.** 💅
+
+---
+
+## 🚀 Get started
+
+<div align="center">
+
+### Let the agent try first.
+
+### When it can't get through to the manager, rent a Karen.
+
+[![Visit RentAKaren.ai](https://img.shields.io/badge/💅_Rent_a_Karen-FF4F87?style=for-the-badge)](https://rentakaren.ai)
+
+**Website:** [rentakaren.ai](https://rentakaren.ai)
+
+</div>
+
+---
+
+<div align="center">
+
+<sub>💅 Karen — for when your AI agent needs to speak to a human.</sub>
+
+</div>
